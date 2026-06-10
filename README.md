@@ -75,7 +75,7 @@ persist.draw.logging=1
 setprop persist.draw.selinux permissive
 setprop persist.draw.selinux enforcing
 
-# Enable DT2W (Infinix HOT 50 / X6882)
+# Enable DT2W
 setprop persist.draw.dt2w 1
 
 # Enable USB OTG
