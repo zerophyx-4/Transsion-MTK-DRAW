@@ -90,3 +90,15 @@ setprop persist.draw.secure 1
 # Pull boot log
 adb pull /data/log/boot_draw.txt
 ```
+
+## Author
+**Made by:** [@pocket_edition](https://t.me/pocket_edition)
+
+## Credits
+Thanks to:
+- [@rianixia](https://t.me/rianixia)
+- [@MorriganAenslandRU](https://t.me/MorriganAenslandRU)
+- [@mysticgsi](https://t.me/mysticgsi)
+- [@ramabondanp](https://t.me/ramabondanp)
+- [@jopvan1](https://t.me/jopvan1)
+- [@rey_early](https://t.me/rey_early)
