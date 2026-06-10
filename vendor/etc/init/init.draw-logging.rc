@@ -1,0 +1,174 @@
+# =============================================================================
+# DRAW — Debugging ROMs Are We
+# init.draw-logging.rc
+#
+# Vendor-baked debug + feature enabler for ROM porting.
+# Triggers at early-init — before bootanimation, before zygote.
+# All persist.draw.* props survive reboots.
+#
+# PROP REFERENCE:
+#   persist.draw.enabled    = 1                  master debug switch
+#   persist.draw.logging    = 1                  full audit/kernel logging
+#   persist.draw.selinux    = permissive|enforcing
+#   persist.draw.secure     = 1                  Play Integrity spoof
+#   persist.draw.dt2w       = 1                  double tap to wake
+#   persist.draw.otg        = 1                  USB OTG toggle
+#   persist.draw.audio_fx   = 0                  disable vendor audio effects
+#   persist.draw.backlight  = 1                  auto backlight scale
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# MASTER DEFAULTS
+# Set at early-init before anything else loads
+# -----------------------------------------------------------------------------
+on early-init
+    setprop persist.draw.enabled 1
+    setprop persist.draw.logging 1
+
+# -----------------------------------------------------------------------------
+# DEBUG PROPS — THIS IS VERY IMPORTANT FOR ALL PORTS
+# Without this, ADB won't work on userdebug/user builds
+# ro.secure=0 allows root ADB; ro.debuggable=1 unlocks debug interfaces
+# -----------------------------------------------------------------------------
+on property:persist.draw.enabled=1
+    setprop ro.secure 0
+    setprop ro.adb.secure 0
+    setprop ro.debuggable 1
+    setprop ro.force.debuggable 1
+    setprop ro.build.type userdebug
+    setprop ro.build.tags test-keys
+    setprop security.perf_harden 0
+
+# -----------------------------------------------------------------------------
+# LOGGING — full audit + kernel log unlock
+# Needed to see AVC denials, HAL crashes, and boot errors in logcat/dmesg
+# printk_ratelimit=0 prevents kernel from suppressing repeated messages
+# -----------------------------------------------------------------------------
+on property:persist.draw.logging=1
+    write /proc/sys/kernel/printk_ratelimit 0
+    write /proc/sys/kernel/printk_ratelimit_burst 0
+    setprop ro.logd.auditd.main true
+    setprop ro.logd.auditd.events true
+    setprop ro.logd.kernel true
+    setprop persist.logd.audit.rate 0
+
+# -----------------------------------------------------------------------------
+# SELINUX TOGGLE — runtime switch, no reboot needed
+# USE WITH CARE: permissive disables all SELinux MAC enforcement
+# Useful for isolating which denials are causing bootloops
+# -----------------------------------------------------------------------------
+on property:persist.draw.selinux=permissive
+    write /sys/fs/selinux/enforce 0
+
+on property:persist.draw.selinux=enforcing
+    write /sys/fs/selinux/enforce 1
+
+# -----------------------------------------------------------------------------
+# USB / ADB FIX — THIS IS VERY IMPORTANT FOR ALL PORTS
+# MTK devices need configfs + ffs aio_compat or ADB won't enumerate
+# diag,adb config ensures ADB is always available at boot
+# -----------------------------------------------------------------------------
+on boot
+    setprop sys.usb.configfs 1
+    setprop sys.usb.ffs.aio_compat true
+
+on property:vendor.usb.controller=*
+    setprop sys.usb.controller ${vendor.usb.controller}
+    setprop sys.usb.config diag,adb
+
+# -----------------------------------------------------------------------------
+# BOOT LOGCAT — saves full boot log to /data/log/boot_draw.txt
+# Kills old log first, starts fresh capture every boot
+# Read with: adb pull /data/log/boot_draw.txt
+# -----------------------------------------------------------------------------
+on post-fs-data
+    mkdir /data/log 0771 system system
+    mkdir /data/draw 0755 root root
+    rm /data/log/boot_draw.txt
+    start draw-bootlog
+
+service draw-bootlog /system/bin/logcat -f /data/log/boot_draw.txt
+    class main
+    user root
+    group root system
+    disabled
+    oneshot
+
+# -----------------------------------------------------------------------------
+# MAIN SETUP — THIS IS THE HEART OF DRAW
+# Runs at post-fs-data so /vendor and /system are already mounted.
+# init.draw-logging.sh handles:
+#   - MTK RIL binary patch (AT+EAIC=2 -> AT+EAIC=3)
+#   - VNDK library override (libbinder, libgui, libcutils)
+#   - fixSPL / keymaster binary patch
+#   - Samsung keylayout injection
+#   - Samsung vendor overlay wipe
+#   - Samsung sysfs permission fix
+#   - Fingerprint/device prop spoof
+#   - Vibrator sysfs setup
+# -----------------------------------------------------------------------------
+on post-fs-data
+    start draw-setup
+
+service draw-setup /vendor/bin/init.draw-logging.sh setup
+    class main
+    user root
+    group root system
+    disabled
+    oneshot
+    seclabel u:r:vendor_init:s0
+
+# -----------------------------------------------------------------------------
+# DOUBLE TAP TO WAKE — THIS IS VERY IMPORTANT FOR INFINIX HOT 50 (X6882)
+# Transsion kernel interface: /proc/gesture_function
+# cc1 = enable, cc2 = full gesture mode
+# Also patches mtk-tpd.kl: key 183 F13 -> WAKEUP
+# -----------------------------------------------------------------------------
+on property:persist.draw.dt2w=1
+    exec -- /vendor/bin/init.draw-logging.sh dt2w_enable
+
+on property:persist.draw.dt2w=0
+    exec -- /vendor/bin/init.draw-logging.sh dt2w_disable
+
+# -----------------------------------------------------------------------------
+# USB OTG — THIS IS VERY IMPORTANT FOR INFINIX HOT 50 (X6882)
+# Transsion sysfs: /sys/.../tran_battery/OTG_CTL
+# Fallback: /sys/class/power_supply/usb/otg_switch
+# -----------------------------------------------------------------------------
+on property:persist.draw.otg=1
+    exec -- /vendor/bin/init.draw-logging.sh otg_enable
+
+on property:persist.draw.otg=0
+    exec -- /vendor/bin/init.draw-logging.sh otg_disable
+
+# -----------------------------------------------------------------------------
+# AUDIO EFFECTS — disable vendor soundfx libs
+# Fixes crackling, distortion, or audio HAL crash on mismatched ROM/vendor
+# Bind mounts empty file over libvolumelistener.so then restarts audioserver
+# -----------------------------------------------------------------------------
+on property:persist.draw.audio_fx=0
+    exec -- /vendor/bin/init.draw-logging.sh audio_fx_disable
+
+on property:persist.draw.audio_fx=1
+    exec -- /vendor/bin/init.draw-logging.sh audio_fx_enable
+
+# -----------------------------------------------------------------------------
+# BACKLIGHT SCALE — IMPORTANT FOR ONE UI
+# One UI expects specific brightness range from hardware node
+# Reads max_brightness from sysfs, sets persist.sys.qcom-brightness
+# Prevents brightness flicker on first boot
+# -----------------------------------------------------------------------------
+on property:persist.draw.backlight=1
+    exec -- /vendor/bin/init.draw-logging.sh backlight_scale
+
+on property:persist.draw.backlight=0
+    setprop persist.sys.qcom-brightness -1
+
+# -----------------------------------------------------------------------------
+# SECURE MODE — VERY IMPORTANT FOR ONE UI
+# Spoofs Play Integrity / SafetyNet verified boot state
+# Copies vendor fingerprint -> system props so Samsung apps don't reject device
+# Without this: Knox, Samsung Pay, and Play Integrity WILL FAIL
+# -----------------------------------------------------------------------------
+on property:persist.draw.secure=1
+    exec -- /vendor/bin/init.draw-logging.sh secure_enable
